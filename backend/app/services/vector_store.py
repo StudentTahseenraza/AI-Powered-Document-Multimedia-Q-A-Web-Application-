@@ -39,7 +39,7 @@ class SimpleVectorStore:
         """Load vectors from JSON file"""
         if os.path.exists(self.index_path):
             try:
-                with open(self.index_path, 'r') as f:
+                with open(self.index_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     self.documents = data.get('documents', [])
                 logger.info(f"Loaded {len(self.documents)} documents from index")
@@ -49,7 +49,7 @@ class SimpleVectorStore:
     def _save_index(self):
         """Save vectors to JSON file"""
         try:
-            with open(self.index_path, 'w') as f:
+            with open(self.index_path, 'w', encoding='utf-8') as f:
                 json.dump({'documents': self.documents}, f)
             logger.info(f"Saved {len(self.documents)} documents to index")
         except Exception as e:
@@ -82,17 +82,21 @@ class SimpleVectorStore:
         
         self._save_index()
         
-        # Also store in MongoDB if available
-        if db:
-            for i, chunk in enumerate(chunks):
-                chunk_data = {
-                    "document_id": str(document_id),
-                    "chunk_index": start_idx + i,
-                    "text": chunk,
-                    "start_time": timestamps[i][0] if timestamps and i < len(timestamps) else None,
-                    "end_time": timestamps[i][1] if timestamps and i < len(timestamps) else None,
-                }
-                await db.chunks.insert_one(chunk_data)
+        # Store in MongoDB if db is provided and not None
+        if db is not None:
+            try:
+                for i, chunk in enumerate(chunks):
+                    chunk_data = {
+                        "document_id": str(document_id),
+                        "chunk_index": start_idx + i,
+                        "text": chunk,
+                        "start_time": timestamps[i][0] if timestamps and i < len(timestamps) else None,
+                        "end_time": timestamps[i][1] if timestamps and i < len(timestamps) else None,
+                    }
+                    await db.chunks.insert_one(chunk_data)
+                logger.info(f"Saved {len(chunks)} chunks to MongoDB")
+            except Exception as e:
+                logger.warning(f"Could not save chunks to MongoDB: {str(e)}")
         
         return list(range(start_idx, start_idx + len(chunks)))
     
@@ -139,7 +143,7 @@ class SimpleVectorStore:
         self.documents = [d for d in self.documents if d["document_id"] != str(document_id)]
         self._save_index()
         
-        if db:
+        if db is not None:
             await db.chunks.delete_many({"document_id": str(document_id)})
 
 # Global instance

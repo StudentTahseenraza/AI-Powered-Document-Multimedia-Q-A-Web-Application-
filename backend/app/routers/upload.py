@@ -59,43 +59,65 @@ async def upload_file(
     }
 
 async def process_uploaded_file(document_id: str, file_path: str, file_type: str, user_id: str):
-    """Background task to process file (NO TRANSCRIPTION)"""
+    """Background task to process file"""
     from app.database import mongodb
     
     db = mongodb.db
     
     try:
-        # Process file - no transcription needed
+        logger.info(f"📄 Processing document {document_id} of type {file_type}")
+        
+        # Process file
         extracted_text, transcript, duration = await FileProcessor.process_file(file_path, file_type)
+        
+        logger.info(f"📝 Extracted text length: {len(extracted_text) if extracted_text else 0} chars")
+        
+        if not extracted_text or len(extracted_text) < 50:
+            logger.warning(f"⚠️ Very little text extracted from {document_id}")
         
         # Create chunks for PDF only
         chunks = []
         if file_type == "pdf" and extracted_text:
             chunks = chunk_pdf_text(extracted_text)
+            logger.info(f"📦 Created {len(chunks)} chunks for vector search")
             
-            # Add to vector store
             if chunks:
                 timestamps = [(None, None)] * len(chunks)
-                await vector_store.add_document_chunks(document_id, chunks, timestamps, db)
+                # Fix: Explicitly check if db is not None
+                if db is not None:
+                    await vector_store.add_document_chunks(document_id, chunks, timestamps, db)
+                else:
+                    await vector_store.add_document_chunks(document_id, chunks, timestamps)
         
-        # Generate summary if there's text
+        # Generate summary if there's enough text
         summary = None
         if extracted_text and len(extracted_text) > 100:
-            summary = await llm_service.generate_summary(extracted_text[:5000])
+            logger.info(f"🤖 Generating summary for {document_id}...")
+            try:
+                summary = await llm_service.generate_summary(extracted_text[:5000])
+                logger.info(f"✅ Summary generated: {len(summary) if summary else 0} chars")
+            except Exception as e:
+                logger.error(f"❌ Summary generation failed: {str(e)}")
+        else:
+            logger.warning(f"⚠️ Not enough text to generate summary: {len(extracted_text) if extracted_text else 0} chars")
         
-        # Update document
+        # Update document - use $set directly
+        update_data = {
+            "extracted_text": extracted_text,
+            "duration": duration,
+            "status": "completed",
+            "updated_at": datetime.utcnow()
+        }
+        if summary:
+            update_data["summary"] = summary
+        
         await db.documents.update_one(
             {"_id": document_id},
-            {"$set": {
-                "extracted_text": extracted_text,
-                "duration": duration,
-                "summary": summary,
-                "status": "completed",
-                "updated_at": datetime.utcnow()
-            }}
+            {"$set": update_data}
         )
         
         logger.info(f"✅ Successfully processed document {document_id}")
+        logger.info(f"📊 Summary saved: {'Yes' if summary else 'No'}")
         
     except Exception as e:
         logger.error(f"❌ Failed to process document {document_id}: {str(e)}")

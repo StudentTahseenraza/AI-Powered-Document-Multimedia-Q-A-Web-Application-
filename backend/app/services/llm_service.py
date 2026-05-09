@@ -1,38 +1,58 @@
-# backend/app/services/llm_service_http.py (Alternative)
-import requests
+# backend/app/services/llm_service.py
+import httpx
 import logging
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 import asyncio
 import json
 import os
 
 logger = logging.getLogger(__name__)
 
-class GeminiHTTPService:
-    """Gemini API using direct HTTP requests"""
+class OpenRouterLLMService:
+    """FREE LLM using OpenRouter's GPT-3.5 Turbo"""
     
     def __init__(self):
-        self.api_key = os.getenv("GOOGLE_API_KEY", "")
-        self.available = bool(self.api_key and self.api_key != "YOUR_ACTUAL_GEMINI_API_KEY_HERE")
+        self.api_key = os.getenv("OPENROUTER_API_KEY", "")
+        self.model = os.getenv("OPENROUTER_MODEL", "openai/gpt-3.5-turbo")
+        self.available = bool(self.api_key and self.api_key != "")
+        
+        self.api_url = "https://openrouter.ai/api/v1/chat/completions"
         
         if self.available:
-            # Use the correct API endpoint
-            self.api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={self.api_key}"
-            self.stream_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:streamGenerateContent?key={self.api_key}"
-            logger.info("✅ Gemini HTTP service initialized")
+            logger.info(f"✅ OpenRouter initialized with model: {self.model}")
         else:
-            logger.warning("❌ GOOGLE_API_KEY not set")
+            logger.warning("❌ OPENROUTER_API_KEY not set")
     
-    async def generate_answer(self, question: str, context: str, stream: bool = False):
-        """Generate answer using HTTP request"""
+    def _get_headers(self) -> dict:
+        """Get request headers for OpenRouter"""
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "http://localhost:8000",
+            "X-Title": "AI Document Q&A App"
+        }
+    
+    async def generate_answer(
+        self, 
+        question: str, 
+        context: str, 
+        stream: bool = False
+    ):
+        """Generate answer using OpenRouter GPT-3.5 Turbo"""
         
         if not self.available:
-            return "⚠️ Gemini API not configured. Please add GOOGLE_API_KEY to .env file"
+            error_msg = "OpenRouter API not configured. Please add OPENROUTER_API_KEY to .env file"
+            if stream:
+                async def error_gen():
+                    yield error_msg
+                return error_gen()
+            return error_msg
         
-        prompt = f"""You are an AI assistant that answers questions based ONLY on the provided context. 
+        system_prompt = """You are an AI assistant that answers questions based ONLY on the provided context. 
 If the answer cannot be found in the context, say "I cannot find this information in the uploaded document."
+Be concise, accurate, and helpful."""
 
-Context:
+        user_prompt = f"""Context:
 {context}
 
 Question: {question}
@@ -40,74 +60,122 @@ Question: {question}
 Provide a detailed, accurate answer based only on the context above.
 Answer:"""
         
-        payload = {
-            "contents": [{
-                "parts": [{"text": prompt}]
-            }],
-            "generationConfig": {
-                "temperature": 0.7,
-                "maxOutputTokens": 1024
-            }
-        }
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
         
         try:
             if stream:
-                return self._stream_response(payload)
+                # Return async generator directly
+                return self._stream_response(messages)
             else:
-                response = requests.post(self.api_url, json=payload, timeout=30)
-                if response.status_code == 200:
-                    data = response.json()
-                    return data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "No response")
-                else:
-                    return f"API Error: {response.status_code} - {response.text}"
+                return await self._get_response(messages)
         except Exception as e:
-            logger.error(f"Gemini HTTP error: {str(e)}")
-            return f"Error: {str(e)}"
+            logger.error(f"OpenRouter API error: {str(e)}")
+            error_msg = f"Error generating response: {str(e)}"
+            if stream:
+                async def error_gen():
+                    yield error_msg
+                return error_gen()
+            return error_msg
     
-    async def _stream_response(self, payload):
-        """Stream response"""
-        async def generate():
-            try:
-                # For streaming, we'll just yield in chunks
-                response = requests.post(self.stream_url, json=payload, stream=True, timeout=30)
-                if response.status_code == 200:
-                    for line in response.iter_lines():
-                        if line:
-                            try:
-                                data = json.loads(line.decode('utf-8'))
-                                text = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-                                if text:
-                                    yield text
-                            except:
-                                continue
-                else:
-                    yield f"Error: {response.status_code}"
-            except Exception as e:
-                yield f"Error: {str(e)}"
-        
-        return generate()
-    
-    async def generate_summary(self, text: str, max_length: int = 500) -> str:
-        """Generate summary"""
-        if not self.available:
-            return "Gemini API not configured"
-        
-        prompt = f"Summarize this text in {max_length} characters or less:\n\n{text[:8000]}"
-        
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.3, "maxOutputTokens": 300}
-        }
-        
-        try:
-            response = requests.post(self.api_url, json=payload, timeout=30)
+    async def _get_response(self, messages: list) -> str:
+        """Get non-streaming response"""
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                self.api_url,
+                headers=self._get_headers(),
+                json={
+                    "model": self.model,
+                    "messages": messages,
+                    "max_tokens": 1024,
+                    "temperature": 0.7,
+                    "stream": False
+                }
+            )
+            
             if response.status_code == 200:
                 data = response.json()
-                return data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "Summary unavailable")
+                return data["choices"][0]["message"]["content"]
             else:
-                return f"Summary unavailable: {response.status_code}"
-        except Exception as e:
-            return f"Summary error: {str(e)}"
+                error_msg = f"API Error: {response.status_code}"
+                logger.error(error_msg)
+                return error_msg
+    
+    async def _stream_response(self, messages: list) -> AsyncGenerator:
+        """Generate streaming response - returns async generator"""
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            async with client.stream(
+                "POST",
+                self.api_url,
+                headers=self._get_headers(),
+                json={
+                    "model": self.model,
+                    "messages": messages,
+                    "max_tokens": 1024,
+                    "temperature": 0.7,
+                    "stream": True
+                }
+            ) as response:
+                if response.status_code != 200:
+                    yield f"Error: {response.status_code}"
+                    return
+                
+                async for line in response.aiter_lines():
+                    if line and line.startswith("data: "):
+                        data_str = line[6:]
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(data_str)
+                            if "choices" in data and len(data["choices"]) > 0:
+                                delta = data["choices"][0].get("delta", {})
+                                content = delta.get("content", "")
+                                if content:
+                                    yield content
+                        except json.JSONDecodeError:
+                            continue
+    
+    async def generate_summary(self, text: str, max_length: int = 500) -> str:
+        """Generate summary using OpenRouter"""
+        if not self.available:
+            return "OpenRouter API not configured"
+        
+        prompt = f"""Summarize the following text in {max_length} characters or less. 
+Be concise and capture the main points.
 
-# Use this service instead
-llm_service = GeminiHTTPService()
+Text:
+{text[:8000]}
+
+Summary:"""
+        
+        messages = [
+            {"role": "system", "content": "You are a text summarization assistant."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    self.api_url,
+                    headers=self._get_headers(),
+                    json={
+                        "model": self.model,
+                        "messages": messages,
+                        "max_tokens": 300,
+                        "temperature": 0.3
+                    }
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    return data["choices"][0]["message"]["content"]
+                else:
+                    return f"Summary unavailable"
+        except Exception as e:
+            logger.error(f"Summary failed: {str(e)}")
+            return f"Summary failed"
+
+# Global instance
+llm_service = OpenRouterLLMService()

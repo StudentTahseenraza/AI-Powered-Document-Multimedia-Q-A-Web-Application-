@@ -29,13 +29,13 @@ async def get_user_documents(
     
     return documents
 
-@router.get("/{document_id}")
-async def get_document(
+@router.get("/debug/summary/{document_id}")
+async def debug_summary(
     document_id: str,
     current_user: dict = Depends(get_current_user),
-    db=Depends(get_db)
+    db = Depends(get_db)
 ):
-    """Get specific document"""
+    """Debug summary generation"""
     
     document = await db.documents.find_one({
         "_id": document_id,
@@ -43,12 +43,18 @@ async def get_document(
     })
     
     if not document:
-        raise HTTPException(status_code=404, detail="Document not found")
+        return {"error": "Document not found"}
     
-    document["id"] = document["_id"]
-    del document["_id"]
-    
-    return document
+    return {
+        "document_id": document_id,
+        "filename": document.get("filename"),
+        "status": document.get("status"),
+        "has_summary": "summary" in document,
+        "summary_value": document.get("summary"),
+        "has_extracted_text": "extracted_text" in document,
+        "extracted_text_length": len(document.get("extracted_text", "")),
+        "extracted_text_preview": document.get("extracted_text", "")[:300]
+    }
 
 @router.delete("/{document_id}")
 async def delete_document(

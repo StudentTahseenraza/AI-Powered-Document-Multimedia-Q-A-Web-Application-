@@ -48,9 +48,9 @@ async def ask_question(
         if search_results:
             context = "\n\n".join([f"Excerpt {i+1}: {r['text']}" for i, r in enumerate(search_results)])
         else:
-            context = document.get("extracted_text", "No content available. The document has been uploaded but not yet processed.")
+            context = document.get("extracted_text", "No content available.")
         
-        # Generate answer using Gemini
+        # Generate answer (non-streaming)
         answer = await llm_service.generate_answer(question, context, stream=False)
         
         # Save to chat history
@@ -112,14 +112,19 @@ async def ask_question_stream(
         else:
             context = document.get("extracted_text", "No content available.")
         
+        # Get the async generator
+        result = await llm_service.generate_answer(question, context, stream=True)
+        
+        # Result should be an async generator
         async def generate():
             try:
-                async for chunk in llm_service.generate_answer(question, context, stream=True):
+                async for chunk in result:
                     yield chunk
             except Exception as e:
                 yield f"Error: {str(e)}"
         
         return StreamingResponse(generate(), media_type="text/plain")
+        
     except HTTPException:
         raise
     except Exception as e:
@@ -132,7 +137,7 @@ async def summarize_document(
     current_user: dict = Depends(get_current_user),
     db = Depends(get_db)
 ):
-    """Get document summary"""
+    """Get document summary - generates if not exists"""
     try:
         document_id = request.get("document_id")
         
@@ -147,22 +152,30 @@ async def summarize_document(
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
         
+        # If summary already exists, return it
         if document.get("summary"):
             return {"summary": document["summary"]}
         
-        # Generate summary if not exists
-        if document.get("extracted_text"):
-            summary = await llm_service.generate_summary(document["extracted_text"][:5000])
-            # Save summary to database
-            await db.documents.update_one(
+        # If no extracted text, can't generate summary
+        if not document.get("extracted_text"):
+            return {"summary": "No content available for summarization. The document may still be processing or has no selectable text."}
+        
+        # Generate summary on demand
+        logger.info(f"Generating summary for document {document_id}")
+        summary = await llm_service.generate_summary(document["extracted_text"][:5000])
+        
+        # Save summary to database
+        await db.documents.update_one(
             {"_id": document_id},
             {"$set": {"summary": summary}}
         )
-            return {"summary": summary}
         
-        return {"summary": "No content available for summarization. The document may still be processing."}
+        logger.info(f"Summary generated and saved: {len(summary)} chars")
+        
+        return {"summary": summary}
+        
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Summarize error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Summarize error: {str(e)}")
+        return {"summary": f"Error generating summary: {str(e)}"}
