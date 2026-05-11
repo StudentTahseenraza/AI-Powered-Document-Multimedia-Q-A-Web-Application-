@@ -19,7 +19,7 @@ async def ask_question(
     current_user: dict = Depends(get_current_user),
     db = Depends(get_db)
 ):
-    """Ask a question about a document"""
+    """Ask a question about a document (Non-streaming - Keeps existing functionality)"""
     try:
         document_id = request.get("document_id")
         question = request.get("question")
@@ -82,7 +82,7 @@ async def ask_question_stream(
     current_user: dict = Depends(get_current_user),
     db = Depends(get_db)
 ):
-    """Ask a question with streaming response"""
+    """Ask a question with streaming response (NEW FEATURE - Adds real-time streaming)"""
     try:
         document_id = request.get("document_id")
         question = request.get("question")
@@ -90,7 +90,7 @@ async def ask_question_stream(
         if not document_id or not question:
             raise HTTPException(status_code=400, detail="Missing document_id or question")
         
-        # Verify document
+        # Verify document belongs to user
         document = await db.documents.find_one({
             "_id": document_id,
             "user_id": current_user["id"]
@@ -107,20 +107,22 @@ async def ask_question_stream(
             db=db
         )
         
+        # Build context
         if search_results:
             context = "\n\n".join([f"Excerpt {i+1}: {r['text']}" for i, r in enumerate(search_results)])
         else:
             context = document.get("extracted_text", "No content available.")
         
-        # Get the async generator
+        # Get the async generator for streaming
         result = await llm_service.generate_answer(question, context, stream=True)
         
-        # Result should be an async generator
+        # Create streaming response
         async def generate():
             try:
                 async for chunk in result:
                     yield chunk
             except Exception as e:
+                logger.error(f"Stream generation error: {str(e)}")
                 yield f"Error: {str(e)}"
         
         return StreamingResponse(generate(), media_type="text/plain")
@@ -137,7 +139,7 @@ async def summarize_document(
     current_user: dict = Depends(get_current_user),
     db = Depends(get_db)
 ):
-    """Get document summary - generates if not exists"""
+    """Get document summary - generates if not exists (Keeps existing functionality)"""
     try:
         document_id = request.get("document_id")
         
@@ -160,7 +162,7 @@ async def summarize_document(
         if not document.get("extracted_text"):
             return {"summary": "No content available for summarization. The document may still be processing or has no selectable text."}
         
-        # Generate summary on demand
+        # Generate summary on demand (uses non-streaming mode)
         logger.info(f"Generating summary for document {document_id}")
         summary = await llm_service.generate_summary(document["extracted_text"][:5000])
         

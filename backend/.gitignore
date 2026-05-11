@@ -3,6 +3,15 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# backend/.gitignore
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.skip
+
 # Virtual environment
 venv/
 .env/

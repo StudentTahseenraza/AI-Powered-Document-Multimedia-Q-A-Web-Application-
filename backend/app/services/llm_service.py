@@ -9,7 +9,7 @@ import os
 logger = logging.getLogger(__name__)
 
 class OpenRouterLLMService:
-    """FREE LLM using OpenRouter's GPT-3.5 Turbo"""
+    """FREE LLM using OpenRouter's GPT-3.5 Turbo with Streaming Support"""
     
     def __init__(self):
         self.api_key = os.getenv("OPENROUTER_API_KEY", "")
@@ -38,7 +38,14 @@ class OpenRouterLLMService:
         context: str, 
         stream: bool = False
     ):
-        """Generate answer using OpenRouter GPT-3.5 Turbo"""
+        """Generate answer using OpenRouter GPT-3.5 Turbo
+        
+        Args:
+            question: User's question
+            context: Document context
+            stream: If True, returns async generator for streaming response
+                    If False, returns complete string response
+        """
         
         if not self.available:
             error_msg = "OpenRouter API not configured. Please add OPENROUTER_API_KEY to .env file"
@@ -67,9 +74,10 @@ Answer:"""
         
         try:
             if stream:
-                # Return async generator directly
+                # Return async generator for streaming
                 return self._stream_response(messages)
             else:
+                # Return complete response (used by summarization)
                 return await self._get_response(messages)
         except Exception as e:
             logger.error(f"OpenRouter API error: {str(e)}")
@@ -81,7 +89,7 @@ Answer:"""
             return error_msg
     
     async def _get_response(self, messages: list) -> str:
-        """Get non-streaming response"""
+        """Get non-streaming response (used for summarization and non-streaming chat)"""
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 self.api_url,
@@ -104,7 +112,7 @@ Answer:"""
                 return error_msg
     
     async def _stream_response(self, messages: list) -> AsyncGenerator:
-        """Generate streaming response - returns async generator"""
+        """Generate streaming response for real-time chat"""
         async with httpx.AsyncClient(timeout=60.0) as client:
             async with client.stream(
                 "POST",
@@ -138,9 +146,9 @@ Answer:"""
                             continue
     
     async def generate_summary(self, text: str, max_length: int = 500) -> str:
-        """Generate summary using OpenRouter"""
+        """Generate summary using OpenRouter (non-streaming - keeps existing functionality)"""
         if not self.available:
-            return "OpenRouter API not configured"
+            return "OpenRouter API not configured. Please add OPENROUTER_API_KEY to .env file"
         
         prompt = f"""Summarize the following text in {max_length} characters or less. 
 Be concise and capture the main points.
@@ -164,7 +172,8 @@ Summary:"""
                         "model": self.model,
                         "messages": messages,
                         "max_tokens": 300,
-                        "temperature": 0.3
+                        "temperature": 0.3,
+                        "stream": False
                     }
                 )
                 
@@ -172,10 +181,11 @@ Summary:"""
                     data = response.json()
                     return data["choices"][0]["message"]["content"]
                 else:
-                    return f"Summary unavailable"
+                    logger.error(f"Summary API error: {response.status_code}")
+                    return f"Summary unavailable (API error: {response.status_code})"
         except Exception as e:
             logger.error(f"Summary failed: {str(e)}")
-            return f"Summary failed"
+            return f"Summary failed: {str(e)}"
 
 # Global instance
 llm_service = OpenRouterLLMService()

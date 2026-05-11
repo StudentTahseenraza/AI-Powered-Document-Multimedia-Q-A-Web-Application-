@@ -8,7 +8,6 @@ from app.config import settings
 from app.database import connect_to_mongo, close_mongo_connection, get_db
 from app.routers import upload, chat, documents, auth_routes
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 @asynccontextmanager
@@ -27,7 +26,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="AI Document & Multimedia Q&A API",
-    description="MongoDB-powered AI Q&A system",
+    description="AI-powered Q&A system",
     version="1.0.0",
     lifespan=lifespan
 )
@@ -50,16 +49,18 @@ app.include_router(documents.router, prefix="/api/documents", tags=["Documents"]
 @app.get("/")
 async def root():
     return {
-        "message": "AI Document Q&A API with MongoDB",
-        "status": "running",
-        "database": "MongoDB Atlas"
+        "message": "AI Document Q&A API",
+        "version": "1.0.0",
+        "status": "running"
     }
 
 @app.get("/health")
 async def health_check(db=Depends(get_db)):
     """Health check endpoint"""
+    if db is None:
+        return {"status": "unhealthy", "database": "disconnected"}
     try:
         await db.command("ping")
-        return {"status": "healthy", "database": "connected"}
+        return {"status": "healthy"}
     except:
-        return {"status": "unhealthy", "database": "disconnected"}
+        return {"status": "unhealthy", "database": "error"}
